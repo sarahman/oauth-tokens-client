@@ -1,0 +1,25 @@
+{
+    "name": "sarahman/oauth-tokens-client",
+    "description": "This package handles the oauth tokens with caching functionality.",
+    "authors": [
+        {
+            "name": "Syed Abidur Rahman",
+            "email": "aabid048@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.3.0",
+        "illuminate/support": "4.*"
+    },
+    "autoload": {
+        "psr-0": {
+            "Sarahman\\OauthTokensClient\\": "src/"
+        }
+    },
+    "config": {
+        "preferred-install": "dist",
+        "secure-http": false,
+        "sort-packages": true
+    },
+    "minimum-stability": "stable"
+}
