@@ -39,7 +39,7 @@ class OAuthClient
         self::$lockKey = $lockKey;
     }
 
-    public function request($method, $uri, array $options = array())
+    public function request($method, $uri, array $options = array(), $retryCount = 1)
     {
         isset($options['headers']) || $options['headers'] = array();
         $options['headers']['Authorization'] = "Bearer {$this->getAccessToken()}";
@@ -49,10 +49,10 @@ class OAuthClient
         } catch (RequestException $e) {
             $response = $e->getResponse();
 
-            if ($response && $response->getStatusCode() === 401) {
+            if ($response && $response->getStatusCode() === 401 && $retryCount > 0) {
                 $options['headers']['Authorization'] = "Bearer {$this->refreshAccessToken()}";
 
-                return $this->httpClient->request($method, $uri, $options);
+                return $this->request($method, $uri, $options, $retryCount - 1);
             }
 
             throw $e;
