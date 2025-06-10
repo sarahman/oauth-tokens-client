@@ -2,6 +2,8 @@
 
 namespace Sarahman\OauthTokensClient;
 
+use Config;
+use GuzzleHttp\Client;
 use Illuminate\Support\ServiceProvider;
 
 class OauthTokensClientServiceProvider extends ServiceProvider
@@ -21,6 +23,8 @@ class OauthTokensClientServiceProvider extends ServiceProvider
     public function boot()
     {
         $this->package('sarahman/oauth-tokens-client');
+
+        include __DIR__ . '/../../config/config.php';
     }
 
     /**
@@ -30,7 +34,15 @@ class OauthTokensClientServiceProvider extends ServiceProvider
      */
     public function register()
     {
-        //
+        $this->app['oauth-tokens-client.service'] = $this->app->share(function ($app) {
+            return new OAuthClient(
+                new Client,
+                $app['cache.store'],
+                Config::get('oauth-tokens-client::OAUTH_CREDENTIAL'),
+                Config::get('oauth-tokens-client::TOKEN_PREFIXES'),
+                Config::get('oauth-tokens-client::LOCK_KEY')
+            );
+        });
     }
 
     /**
