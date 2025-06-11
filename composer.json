@@ -1,6 +1,11 @@
 {
     "name": "sarahman/oauth-tokens-client",
     "description": "This package handles the oauth tokens with caching functionality.",
+    "keywords": ["http", "api", "request", "framework", "laravel", "lumen"],
+    "type": "library",
+    "version": "1.0.0",
+    "license": "MIT",
+    "prefer-stable": true,
     "authors": [
         {
             "name": "Syed Abidur Rahman",
