@@ -19,13 +19,14 @@
     "prefer-stable": true,
     "require": {
         "php": ">=5.3.0",
-        "guzzlehttp/guzzle": "^4.0 || ^5.0 || ^6.0",
-        "illuminate/cache": "~4.0",
-        "illuminate/support": "4.*",
+        "guzzlehttp/guzzle": "^4.0 || ^5.0 || ^6.0 || ^7.0",
+        "illuminate/cache": ">=4.0",
+        "illuminate/support": ">=4.0",
+        "psr/http-message": "^1.0",
         "sarahman/laravel-http-request-api-log": "^1.0"
     },
     "autoload": {
-        "psr-0": {
+        "psr-4": {
             "Sarahman\\OauthTokensClient\\": "src/"
         }
     },
@@ -34,5 +35,12 @@
         "process-timeout": 0,
         "secure-http": false,
         "sort-packages": true
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Sarahman\\OauthTokensClient\\OauthTokensClientServiceProvider"
+            ]
+        }
     }
 }

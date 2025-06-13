@@ -168,7 +168,7 @@ class OAuthClient
     /**
      * Parses the OAuth token response and stores the tokens.
      *
-     * @param \GuzzleHttp\Message\ResponseInterface $response The response containing OAuth tokens to be parsed and stored.
+     * @param \GuzzleHttp\Message\ResponseInterface|\Psr\Http\Message\ResponseInterface $response The response containing OAuth tokens to be parsed and stored.
      *
      * @return string
      */
