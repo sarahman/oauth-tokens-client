@@ -6,7 +6,7 @@ use Config;
 use GuzzleHttp\Client;
 use Illuminate\Support\ServiceProvider;
 
-class OauthTokensClientServiceProvider extends ServiceProvider
+class ServiceProviderForLaravel4 extends ServiceProvider
 {
     /**
      * Indicates if loading of the provider is deferred.
@@ -22,9 +22,9 @@ class OauthTokensClientServiceProvider extends ServiceProvider
      */
     public function boot()
     {
-        $this->package('sarahman/oauth-tokens-client');
+        $this->package('sarahman/oauth-tokens-client', null, __DIR__);
 
-        include __DIR__ . '/../../config/config.php';
+        include __DIR__ . '/config/config.php';
     }
 
     /**
