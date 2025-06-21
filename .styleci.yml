@@ -1,0 +1,20 @@
+# StyleCI configuration for sarahman/oauth-tokens-client
+preset: psr2
+
+# PHP 5.3 compatibility
+php: 5.3
+
+# Monolithic mode ensures entire repo uses one config
+monolithic: true
+
+# Do not allow risky fixers (like those that might change logic)
+risky: false
+
+# Only format these directories
+finder:
+  - path: src
+  - path: tests
+  - not-name: '*TestCase.php'   # optional, exclude abstract test classes
+  - not-path: vendor
+  - not-path: bootstrap
+  - not-path: node_modules
