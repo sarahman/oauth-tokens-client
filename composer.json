@@ -4,7 +4,7 @@
     "license": "MIT",
     "type": "library",
     "keywords": ["laravel", "library", "passport", "oauth", "tokens", "client", "cache"],
-    "version": "1.0.1",
+    "version": "1.1.0",
     "authors": [
         {
             "name": "Syed Abidur Rahman",
