@@ -21,7 +21,8 @@
         "php": ">=5.3.0",
         "guzzlehttp/guzzle": "^4.0 || ^5.0 || ^6.0",
         "illuminate/cache": "~4.0",
-        "illuminate/support": "4.*"
+        "illuminate/support": "4.*",
+        "sarahman/laravel-http-request-api-log": "^1.0"
     },
     "autoload": {
         "psr-0": {
