@@ -6,9 +6,12 @@ use Exception;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Illuminate\Cache\Repository as CacheRepository;
+use Sarahman\HttpRequestApiLog\Traits\WritesHttpLogs;
 
 class OAuthClient
 {
+    use WritesHttpLogs;
+
     private static $accessTokenKey;
     private static $refreshTokenKey;
     private static $lockKey;
@@ -52,7 +55,11 @@ class OAuthClient
         $options['headers']['Authorization'] = "Bearer {$this->getAccessToken()}";
 
         try {
-            return $this->httpClient->request($method, $uri, $options);
+            $response = $this->httpClient->request($method, $uri, $options);
+
+            $this->log($method, $uri, $options, new GuzzleResponse(200, [], $response->getBody()));
+
+            return $response;
         } catch (RequestException $e) {
             $response = $e->getResponse();
 
@@ -61,6 +68,8 @@ class OAuthClient
 
                 return $this->request($method, $uri, $options, $retryCount - 1);
             }
+
+            $this->log($method, $uri, $options, new GuzzleResponse($e->getCode(), [], $response->getBody()));
 
             throw $e;
         }
@@ -100,7 +109,7 @@ class OAuthClient
             if (!$refreshToken) {
                 $token = $this->fetchInitialTokens();
             } else {
-                $response = $this->httpClient->post($this->refreshUrl, array(
+                $response = $this->httpClient->post($this->refreshUrl, $options = array(
                     'form_params' => array(
                         'grant_type'    => 'refresh_token',
                         'refresh_token' => $refreshToken,
@@ -110,10 +119,14 @@ class OAuthClient
                     ),
                 ));
 
+                $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse(200, [], $response->getBody()));
+
                 $token = $this->parseAndStoreTokens($response);
             }
         } catch (RequestException $e) {
             $response = $e->getResponse();
+
+            $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse($e->getCode(), [], $response->getBody()));
 
             if ($response && $response->getStatusCode() === 401) {
                 return $this->fetchInitialTokens();
@@ -143,9 +156,11 @@ class OAuthClient
             $params['password'] = $this->password;
         }
 
-        $response = $this->httpClient->post($this->tokenUrl, array(
+        $response = $this->httpClient->post($uri = $this->tokenUrl, $options = array(
             'form_params' => $params,
         ));
+
+        $this->log('POST', $this->tokenUrl, $options, new GuzzleResponse(200, [], $response->getBody()));
 
         return $this->parseAndStoreTokens($response);
     }
