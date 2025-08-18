@@ -9,23 +9,14 @@ use Illuminate\Support\ServiceProvider;
 class OauthTokensClientServiceProvider extends ServiceProvider
 {
     /**
-     * Indicates if loading of the provider is deferred.
-     *
-     * @var bool
-     */
-    protected $defer = true;
-
-    /**
      * Bootstrap the application events.
      *
      * @return void
      */
     public function boot()
     {
-        $this->package('sarahman/oauth-tokens-client');
+        $this->package('sarahman/oauth-tokens-client', null, __DIR__ . '/../..');
         $this->package('sarahman/laravel-http-request-api-log', null, __DIR__ . '/../../../../laravel-http-request-api-log/src');
-
-        include __DIR__ . '/../../config/config.php';
     }
 
     /**
