@@ -52,12 +52,13 @@ class OAuthClient
     public function request($method, $uri, array $options = array(), $retryCount = 1)
     {
         isset($options['headers']) || $options['headers'] = array();
+        $options['headers'] = array_merge($options['headers'], $this->getHeaders());
         $options['headers']['Authorization'] = "Bearer {$this->getAccessToken()}";
 
         try {
             $response = $this->httpClient->request($method, $uri, $options);
 
-            $this->log($method, $uri, $options, new GuzzleResponse(200, [], $response->getBody()));
+            $this->log($method, $uri, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
 
             return $response;
         } catch (RequestException $e) {
@@ -69,10 +70,18 @@ class OAuthClient
                 return $this->request($method, $uri, $options, $retryCount - 1);
             }
 
-            $this->log($method, $uri, $options, new GuzzleResponse($e->getCode(), [], $response->getBody()));
+            $this->log($method, $uri, $options, new GuzzleResponse($e->getCode(), $response->getHeaders(), $response->getBody()));
 
             throw $e;
         }
+    }
+
+    private function getHeaders()
+    {
+        return [
+            'Accept'       => 'application/json',
+            'Content-Type' => 'application/json',
+        ];
     }
 
     private function getAccessToken()
@@ -110,7 +119,8 @@ class OAuthClient
                 $token = $this->fetchInitialTokens();
             } else {
                 $response = $this->httpClient->post($this->refreshUrl, $options = array(
-                    'form_params' => array(
+                    'headers' => $this->getHeaders(),
+                    'json'    => array(
                         'grant_type'    => 'refresh_token',
                         'refresh_token' => $refreshToken,
                         'client_id'     => $this->clientId,
@@ -119,20 +129,21 @@ class OAuthClient
                     ),
                 ));
 
-                $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse(200, [], $response->getBody()));
+                $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
 
                 $token = $this->parseAndStoreTokens($response);
             }
         } catch (RequestException $e) {
             $response = $e->getResponse();
 
-            $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse($e->getCode(), [], $response->getBody()));
+            $this->log('POST', $this->refreshUrl, empty($options) ? [] : $options, new GuzzleResponse($e->getCode(), $response->getHeaders(), $response->getBody()));
 
-            if ($response && $response->getStatusCode() === 401) {
-                return $this->fetchInitialTokens();
+            if ($response && $response->getStatusCode() !== 401) {
+                $this->cache->forget(self::$lockKey);
+                throw $e;
             }
 
-            throw $e;
+            $token = $this->fetchInitialTokens();
         } catch (Exception $e) {
             $this->cache->forget(self::$lockKey);
             throw $e;
@@ -146,9 +157,10 @@ class OAuthClient
     private function fetchInitialTokens()
     {
         $params = array(
-            'grant_type' => $this->grantType,
-            'client_id'  => $this->clientId,
+            'grant_type'    => $this->grantType,
+            'client_id'     => $this->clientId,
             'client_secret' => $this->clientSecret,
+            'scope'         => $this->scope,
         );
 
         if ('password' === $this->grantType && $this->username && $this->password) {
@@ -157,10 +169,11 @@ class OAuthClient
         }
 
         $response = $this->httpClient->post($uri = $this->tokenUrl, $options = array(
-            'form_params' => $params,
+            'headers' => $this->getHeaders(),
+            'json'    => $params,
         ));
 
-        $this->log('POST', $this->tokenUrl, $options, new GuzzleResponse(200, [], $response->getBody()));
+        $this->log('POST', $uri, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
 
         return $this->parseAndStoreTokens($response);
     }
@@ -176,7 +189,7 @@ class OAuthClient
     {
         $data = json_decode((string) $response->getBody(), true);
 
-        if (json_last_error()) {
+        if (json_last_error() !== JSON_ERROR_NONE || !isset($data['access_token'])) {
             return '';
         }
 
@@ -188,6 +201,6 @@ class OAuthClient
     private function storeTokens(array $data)
     {
         $this->cache->put(self::$accessTokenKey, $data['access_token'], $data['expires_in'] - 30);
-        $this->cache->forever(self::$refreshTokenKey, $data['refresh_token']);
+        isset($data['refresh_token']) && $this->cache->forever(self::$refreshTokenKey, $data['refresh_token']);
     }
 }

@@ -7,7 +7,7 @@ return array(
     ),
     'LOCK_KEY'         => 'oauth_token_refresh_lock',
     'OAUTH_CREDENTIAL' => array(
-        'GRANT_TYPE'    => 'client_credentials',
+        'GRANT_TYPE'    => 'password',
         'TOKEN_URL'     => null,
         'REFRESH_URL'   => null,
         'CLIENT_ID'     => null,
