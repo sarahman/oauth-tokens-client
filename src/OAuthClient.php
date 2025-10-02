@@ -5,12 +5,19 @@ namespace Sarahman\OauthTokensClient;
 use Exception;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\Psr7\Request as GuzzleRequest;
 use Illuminate\Cache\Repository as CacheRepository;
+use RuntimeException;
 use Sarahman\HttpRequestApiLog\Traits\WritesHttpLogs;
 
 class OAuthClient
 {
     use WritesHttpLogs;
+
+    const MAX_RETRY_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 1000;
+    const LOCK_WAIT_MS = 50000; // 50ms
+    const LOCK_TTL_SECONDS = 10;
 
     private static $accessTokenKey;
     private static $refreshTokenKey;
@@ -58,6 +65,10 @@ class OAuthClient
         try {
             $response = $this->httpClient->request($method, $uri, $options);
 
+            if ($response && $response->getStatusCode() === 401 && $retryCount > 0) {
+                throw new RequestException('Unauthorized Access Token!', new GuzzleRequest($method, $uri, $options['headers'], isset($options['json']) ? json_encode($options['json']) : null), $response);
+            }
+
             $this->log($method, $uri, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
 
             return $response;
@@ -84,7 +95,7 @@ class OAuthClient
         ];
     }
 
-    private function getAccessToken()
+    private function getAccessToken($waitForToken = true)
     {
         $token = $this->cache->get(self::$accessTokenKey);
 
@@ -92,31 +103,38 @@ class OAuthClient
             return $token;
         }
 
-        while ($this->cache->has(self::$lockKey)) {
-            usleep(50000); // wait 50ms
+        if ($waitForToken) {
+            $this->waitForLock();
+
+            return $this->getAccessToken(false);
         }
 
         return $this->refreshAccessToken();
     }
 
+    private function waitForLock()
+    {
+        while ($this->cache->has(self::$lockKey)) {
+            usleep(self::LOCK_WAIT_MS);
+        }
+    }
+
     private function refreshAccessToken()
     {
         if ($this->cache->has(self::$lockKey)) {
-            while ($this->cache->has(self::$lockKey)) {
-                usleep(50000);
-            }
+            $this->waitForLock();
 
             return $this->cache->get(self::$accessTokenKey);
         }
 
-        $this->cache->put(self::$lockKey, true, 10);
+        $this->cache->put(self::$lockKey, true, self::LOCK_TTL_SECONDS);
 
         try {
             $token = '';
             $refreshToken = $this->cache->get(self::$refreshTokenKey);
 
             if (!$refreshToken) {
-                $token = $this->fetchInitialTokens();
+                $token = $this->fetchAccessTokenWithRetry();
             } else {
                 $response = $this->httpClient->post($this->refreshUrl, $options = array(
                     'headers' => $this->getHeaders(),
@@ -128,6 +146,10 @@ class OAuthClient
                         'scope'         => $this->scope,
                     ),
                 ));
+
+                if ($response && $response->getStatusCode() === 401) {
+                    throw new RequestException('Unauthorized Access Token!', new GuzzleRequest('post', $this->refreshUrl, $options['headers'], isset($options['json']) ? json_encode($options['json']) : null), $response);
+                }
 
                 $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
 
@@ -143,7 +165,7 @@ class OAuthClient
                 throw $e;
             }
 
-            $token = $this->fetchInitialTokens();
+            $token = $this->fetchAccessTokenWithRetry();
         } catch (Exception $e) {
             $this->cache->forget(self::$lockKey);
             throw $e;
@@ -152,6 +174,41 @@ class OAuthClient
         $this->cache->forget(self::$lockKey);
 
         return $token;
+    }
+
+    private function fetchAccessTokenWithRetry()
+    {
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < self::MAX_RETRY_ATTEMPTS) {
+            $attempt++;
+
+            try {
+                return $this->fetchInitialTokens();
+            } catch (Exception $e) {
+                $lastException = $e;
+
+                // Log the retry attempt
+                error_log(sprintf('OAuth token fetch attempt %d/%d failed: %s', $attempt, self::MAX_RETRY_ATTEMPTS, $e->getMessage()));
+
+                // Don't sleep on the last attempt
+                if ($attempt < self::MAX_RETRY_ATTEMPTS) {
+                    usleep(self::RETRY_DELAY_MS * 1000);
+                }
+            }
+        }
+
+        // All retry attempts failed
+        throw new RuntimeException(
+            sprintf(
+                'Failed to fetch OAuth access token after %d attempts. Last error: %s',
+                self::MAX_RETRY_ATTEMPTS,
+                $lastException ? $lastException->getMessage() : 'Unknown error'
+            ),
+            0,
+            $lastException
+        );
     }
 
     private function fetchInitialTokens()
@@ -164,8 +221,10 @@ class OAuthClient
         );
 
         if ('password' === $this->grantType && $this->username && $this->password) {
-            $params['username'] = $this->username;
-            $params['password'] = $this->password;
+            $params = array_merge($params, [
+                'username' => $this->username,
+                'password' => $this->password,
+            ]);
         }
 
         $response = $this->httpClient->post($uri = $this->tokenUrl, $options = array(
@@ -174,6 +233,10 @@ class OAuthClient
         ));
 
         $this->log('POST', $uri, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
+
+        if ($response && ($statusCode = $response->getStatusCode()) === 401) {
+            throw new Exception('Something went wrong while trying to fetch initial tokens.', $statusCode);
+        }
 
         return $this->parseAndStoreTokens($response);
     }
@@ -200,7 +263,11 @@ class OAuthClient
 
     private function storeTokens(array $data)
     {
-        $this->cache->put(self::$accessTokenKey, $data['access_token'], $data['expires_in'] - 30);
+        if (!isset($data['access_token']) || !isset($data['expires_in'])) {
+            return;
+        }
+
+        $this->cache->put(self::$accessTokenKey, $data['access_token'], max(1, (int) $data['expires_in'] - 30));
         isset($data['refresh_token']) && $this->cache->forever(self::$refreshTokenKey, $data['refresh_token']);
     }
 }
