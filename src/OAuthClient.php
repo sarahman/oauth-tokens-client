@@ -14,14 +14,9 @@ class OAuthClient
 {
     use WritesHttpLogs;
 
-    const MAX_RETRY_ATTEMPTS = 3;
-    const RETRY_DELAY_MS = 1000;
     const LOCK_WAIT_MS = 50000; // 50ms
     const LOCK_TTL_SECONDS = 10;
-
-    private static $accessTokenKey;
-    private static $refreshTokenKey;
-    private static $lockKey;
+    const TOKEN_EXPIRY_BUFFER_SECONDS = 30;
 
     /** @var Client */
     private $httpClient;
@@ -38,22 +33,30 @@ class OAuthClient
     private $password;
     private $scope = '';
 
-    public function __construct(Client $httpClient, CacheRepository $cache, array $oauthConfig, array $tokenPrefixes, $lockKey)
+    private $accessTokenKey;
+    private $refreshTokenKey;
+    private $lockKey;
+    private $maxRetries;
+    private $retryDelay;
+
+    public function __construct(Client $httpClient, CacheRepository $cache, array $credentials, array $tokenPrefixes, $lockKey, $maxRetries = 3, $retryDelay = 1)
     {
         $this->httpClient = $httpClient;
         $this->cache = $cache;
-        $this->tokenUrl = $oauthConfig['TOKEN_URL'];
-        $this->refreshUrl = $oauthConfig['REFRESH_URL'];
-        $this->grantType = $oauthConfig['GRANT_TYPE'];
-        $this->clientId = $oauthConfig['CLIENT_ID'];
-        $this->clientSecret = $oauthConfig['CLIENT_SECRET'];
-        $this->username = $oauthConfig['USERNAME'];
-        $this->password = $oauthConfig['PASSWORD'];
-        $this->scope = $oauthConfig['SCOPE'];
+        $this->tokenUrl = $credentials['TOKEN_URL'];
+        $this->refreshUrl = $credentials['REFRESH_URL'];
+        $this->grantType = $credentials['GRANT_TYPE'];
+        $this->clientId = $credentials['CLIENT_ID'];
+        $this->clientSecret = $credentials['CLIENT_SECRET'];
+        $this->username = isset($credentials['USERNAME']) ? $credentials['USERNAME'] : null;
+        $this->password = isset($credentials['PASSWORD']) ? $credentials['PASSWORD'] : null;
+        $this->scope = isset($credentials['SCOPE']) ? $credentials['SCOPE'] : '';
 
-        self::$accessTokenKey = $tokenPrefixes['ACCESS'];
-        self::$refreshTokenKey = $tokenPrefixes['REFRESH'];
-        self::$lockKey = $lockKey;
+        $this->accessTokenKey = $tokenPrefixes['ACCESS'];
+        $this->refreshTokenKey = $tokenPrefixes['REFRESH'];
+        $this->lockKey = $lockKey;
+        $this->maxRetries = $maxRetries;
+        $this->retryDelay = $retryDelay;
     }
 
     public function request($method, $uri, array $options = array(), $retryCount = 1)
@@ -97,7 +100,7 @@ class OAuthClient
 
     private function getAccessToken($waitForToken = true)
     {
-        $token = $this->cache->get(self::$accessTokenKey);
+        $token = $this->cache->get($this->accessTokenKey);
 
         if ($token) {
             return $token;
@@ -114,24 +117,24 @@ class OAuthClient
 
     private function waitForLock()
     {
-        while ($this->cache->has(self::$lockKey)) {
+        while ($this->cache->has($this->lockKey)) {
             usleep(self::LOCK_WAIT_MS);
         }
     }
 
     private function refreshAccessToken()
     {
-        if ($this->cache->has(self::$lockKey)) {
+        if ($this->cache->has($this->lockKey)) {
             $this->waitForLock();
 
-            return $this->cache->get(self::$accessTokenKey);
+            return $this->cache->get($this->accessTokenKey);
         }
 
-        $this->cache->put(self::$lockKey, true, self::LOCK_TTL_SECONDS);
+        $this->cache->put($this->lockKey, true, self::LOCK_TTL_SECONDS);
 
         try {
             $token = '';
-            $refreshToken = $this->cache->get(self::$refreshTokenKey);
+            $refreshToken = $this->cache->get($this->refreshTokenKey);
 
             if (!$refreshToken) {
                 $token = $this->fetchAccessTokenWithRetry();
@@ -161,17 +164,17 @@ class OAuthClient
             $this->log('POST', $this->refreshUrl, empty($options) ? [] : $options, new GuzzleResponse($e->getCode(), $response->getHeaders(), $response->getBody()));
 
             if ($response && $response->getStatusCode() !== 401) {
-                $this->cache->forget(self::$lockKey);
+                $this->cache->forget($this->lockKey);
                 throw $e;
             }
 
             $token = $this->fetchAccessTokenWithRetry();
         } catch (Exception $e) {
-            $this->cache->forget(self::$lockKey);
+            $this->cache->forget($this->lockKey);
             throw $e;
         }
 
-        $this->cache->forget(self::$lockKey);
+        $this->cache->forget($this->lockKey);
 
         return $token;
     }
@@ -181,7 +184,7 @@ class OAuthClient
         $attempt = 0;
         $lastException = null;
 
-        while ($attempt < self::MAX_RETRY_ATTEMPTS) {
+        while ($attempt < $this->maxRetries) {
             $attempt++;
 
             try {
@@ -190,11 +193,11 @@ class OAuthClient
                 $lastException = $e;
 
                 // Log the retry attempt
-                error_log(sprintf('OAuth token fetch attempt %d/%d failed: %s', $attempt, self::MAX_RETRY_ATTEMPTS, $e->getMessage()));
+                error_log(sprintf('OAuth token fetch attempt %d/%d failed: %s', $attempt, $this->maxRetries, $e->getMessage()));
 
                 // Don't sleep on the last attempt
-                if ($attempt < self::MAX_RETRY_ATTEMPTS) {
-                    usleep(self::RETRY_DELAY_MS * 1000);
+                if ($attempt < $this->maxRetries) {
+                    usleep($this->retryDelay * 1000000);
                 }
             }
         }
@@ -203,7 +206,7 @@ class OAuthClient
         throw new RuntimeException(
             sprintf(
                 'Failed to fetch OAuth access token after %d attempts. Last error: %s',
-                self::MAX_RETRY_ATTEMPTS,
+                $this->maxRetries,
                 $lastException ? $lastException->getMessage() : 'Unknown error'
             ),
             0,
@@ -267,7 +270,7 @@ class OAuthClient
             return;
         }
 
-        $this->cache->put(self::$accessTokenKey, $data['access_token'], max(1, (int) $data['expires_in'] - 30));
-        isset($data['refresh_token']) && $this->cache->forever(self::$refreshTokenKey, $data['refresh_token']);
+        $this->cache->put($this->accessTokenKey, $data['access_token'], max(1, (int) $data['expires_in'] - self::TOKEN_EXPIRY_BUFFER_SECONDS));
+        isset($data['refresh_token']) && $this->cache->forever($this->refreshTokenKey, $data['refresh_token']);
     }
 }
