@@ -22,6 +22,7 @@
         "guzzlehttp/guzzle": "^4.0 || ^5.0 || ^6.0",
         "illuminate/cache": "~4.0",
         "illuminate/support": "4.*",
+        "sarahman/guzzle-client-trait": "^1.0",
         "sarahman/laravel-http-request-api-log": "^1.0"
     },
     "autoload": {
