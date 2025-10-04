@@ -4,15 +4,14 @@ namespace Sarahman\OauthTokensClient;
 
 use Exception;
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\RequestException;
-use GuzzleHttp\Psr7\Request as GuzzleRequest;
 use Illuminate\Cache\Repository as CacheRepository;
 use RuntimeException;
 use Sarahman\HttpRequestApiLog\Traits\WritesHttpLogs;
+use Sarahman\Traits\Guzzles;
 
 class OAuthClient
 {
-    use WritesHttpLogs;
+    use Guzzles, WritesHttpLogs;
 
     const LOCK_WAIT_MS = 50000; // 50ms
     const LOCK_TTL_SECONDS = 10;
@@ -63,31 +62,19 @@ class OAuthClient
     {
         isset($options['headers']) || $options['headers'] = array();
         $options['headers'] = array_merge($options['headers'], $this->getHeaders());
-        $options['headers']['Authorization'] = "Bearer {$this->getAccessToken()}";
+        isset($options['headers']['Authorization']) || $options['headers']['Authorization'] = "Bearer {$this->getAccessToken()}";
 
-        try {
-            $response = $this->httpClient->request($method, $uri, $options);
+        $response = $this->makeRequestWithHandlingException($this->httpClient, $method, $uri, $options);
 
-            if ($response && $response->getStatusCode() === 401 && $retryCount > 0) {
-                throw new RequestException('Unauthorized Access Token!', new GuzzleRequest($method, $uri, $options['headers'], isset($options['json']) ? json_encode($options['json']) : null), $response);
-            }
+        $this->log($method, $uri, $options, $response);
 
-            $this->log($method, $uri, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
+        if ($response && $response->getStatusCode() === 401 && $retryCount > 0) {
+            $options['headers']['Authorization'] = "Bearer {$this->refreshAccessToken()}";
 
-            return $response;
-        } catch (RequestException $e) {
-            $response = $e->getResponse();
-
-            if ($response && $response->getStatusCode() === 401 && $retryCount > 0) {
-                $options['headers']['Authorization'] = "Bearer {$this->refreshAccessToken()}";
-
-                return $this->request($method, $uri, $options, $retryCount - 1);
-            }
-
-            $this->log($method, $uri, $options, new GuzzleResponse($e->getCode(), $response->getHeaders(), $response->getBody()));
-
-            throw $e;
+            return $this->request($method, $uri, $options, $retryCount - 1);
         }
+
+        return $response;
     }
 
     private function getHeaders()
@@ -132,46 +119,29 @@ class OAuthClient
 
         $this->cache->put($this->lockKey, true, self::LOCK_TTL_SECONDS);
 
-        try {
-            $token = '';
-            $refreshToken = $this->cache->get($this->refreshTokenKey);
+        $refreshToken = $this->cache->get($this->refreshTokenKey);
 
-            if (!$refreshToken) {
+        if (!$refreshToken) {
+            $token = $this->fetchAccessTokenWithRetry();
+        } else {
+            $response = $this->makeRequestWithHandlingException($this->httpClient, $method = 'POST', $this->refreshUrl, $options = array(
+                'headers' => $this->getHeaders(),
+                'json'    => array(
+                    'grant_type'    => 'refresh_token',
+                    'refresh_token' => $refreshToken,
+                    'client_id'     => $this->clientId,
+                    'client_secret' => $this->clientSecret,
+                    'scope'         => $this->scope,
+                ),
+            ));
+
+            $this->log($method, $this->refreshUrl, $options, $response);
+
+            if ($response && $response->getStatusCode() === 401) {
                 $token = $this->fetchAccessTokenWithRetry();
             } else {
-                $response = $this->httpClient->post($this->refreshUrl, $options = array(
-                    'headers' => $this->getHeaders(),
-                    'json'    => array(
-                        'grant_type'    => 'refresh_token',
-                        'refresh_token' => $refreshToken,
-                        'client_id'     => $this->clientId,
-                        'client_secret' => $this->clientSecret,
-                        'scope'         => $this->scope,
-                    ),
-                ));
-
-                if ($response && $response->getStatusCode() === 401) {
-                    throw new RequestException('Unauthorized Access Token!', new GuzzleRequest('post', $this->refreshUrl, $options['headers'], isset($options['json']) ? json_encode($options['json']) : null), $response);
-                }
-
-                $this->log('POST', $this->refreshUrl, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
-
                 $token = $this->parseAndStoreTokens($response);
             }
-        } catch (RequestException $e) {
-            $response = $e->getResponse();
-
-            $this->log('POST', $this->refreshUrl, empty($options) ? [] : $options, new GuzzleResponse($e->getCode(), $response->getHeaders(), $response->getBody()));
-
-            if ($response && $response->getStatusCode() !== 401) {
-                $this->cache->forget($this->lockKey);
-                throw $e;
-            }
-
-            $token = $this->fetchAccessTokenWithRetry();
-        } catch (Exception $e) {
-            $this->cache->forget($this->lockKey);
-            throw $e;
         }
 
         $this->cache->forget($this->lockKey);
@@ -230,12 +200,12 @@ class OAuthClient
             ]);
         }
 
-        $response = $this->httpClient->post($uri = $this->tokenUrl, $options = array(
+        $response = $this->makeRequestWithHandlingException($this->httpClient, $method = 'POST', $this->tokenUrl, $options = array(
             'headers' => $this->getHeaders(),
             'json'    => $params,
         ));
 
-        $this->log('POST', $uri, $options, new GuzzleResponse($response->getStatusCode(), $response->getHeaders(), $response->getBody()));
+        $this->log($method, $this->tokenUrl, $options, $response);
 
         if ($response && ($statusCode = $response->getStatusCode()) === 401) {
             throw new Exception('Something went wrong while trying to fetch initial tokens.', $statusCode);
